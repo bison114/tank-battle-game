@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>网页坦克大战</title>
+    <style>
+        body {
+            background-color: #333333;
+            text-align: center;
+            font-family: Arial, sans-serif;
+            color: #ffffff;
+        }
+        canvas {
+            background-color: #000000;
+            border: 2px solid #ffffff;
+        }
+        .tip {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="tip">操作提示：WASD控制坦克移动、空格键发射子弹、刷新页面重新开局</div>
+    <canvas id="gameCanvas" width="600" height="500"></canvas>
+
+    <script>
+        // 获取画布与上下文
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
+
+        // 按键状态存储
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false,
+            space: false
+        };
+
+        // 我方坦克配置
+        const playerTank = {
+            x: canvasWidth / 2 - 20,
+            y: canvasHeight / 2 - 20,
+            width: 40,
+            height: 40,
+            speed: 3,
+            dir: 'up', // up down left right
+            color: '#0088ff'
+        };
+
+        // 子弹数组
+        let bullets = [];
+        const bulletRadius = 4;
+        const bulletSpeed = 6;
+
+        // 敌方坦克数组
+        let enemyTanks = [];
+        const enemyCount = 5;
+
+        // 初始化敌方坦克
+        function initEnemies() {
+            enemyTanks = [];
+            for (let i = 0; i < enemyCount; i++) {
+                enemyTanks.push({
+                    x: Math.random() * (canvasWidth - 40),
+                    y: Math.random() * (canvasHeight - 40),
+                    width: 40,
+                    height: 40,
+                    speed: 1.5,
+                    dir: getRandomDir(),
+                    color: '#ff2222',
+                    changeDirTimer: 0
+                });
+            }
+        }
+
+        // 获取随机方向
+        function getRandomDir() {
+            const dirs = ['up', 'down', 'left', 'right'];
+            return dirs[Math.floor(Math.random() * 4)];
+        }
+
+        // 绘制单个坦克
+        function drawTank(tank) {
+            // 坦克底盘方形
+            ctx.fillStyle = tank.color;
+            ctx.fillRect(tank.x, tank.y, tank.width, tank.height);
+            ctx.strokeStyle = '#fff';
+            ctx.strokeRect(tank.x, tank.y, tank.width, tank.height);
+
+            // 炮管
+            ctx.fillStyle = '#fff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            const centerX = tank.x + tank.width / 2;
+            const centerY = tank.y + tank.height / 2;
+            switch (tank.dir) {
+                case 'up':
+                    ctx.moveTo(centerX, centerY);
+                    ctx.lineTo(centerX, tank.y - 12);
+                    break;
+                case 'down':
+                    ctx.moveTo(centerX, centerY);
+                    ctx.lineTo(centerX, tank.y + tank.height + 12);
+                    break;
+                case 'left':
+                    ctx.moveTo(centerX, centerY);
+                    ctx.lineTo(tank.x - 12, centerY);
+                    break;
+                case 'right':
+                    ctx.moveTo(centerX, centerY);
+                    ctx.lineTo(tank.x + tank.width + 12, centerY);
+                    break;
+            }
+            ctx.stroke();
+        }
+
+        // 发射子弹
+        function shootBullet(tank) {
+            const centerX = tank.x + tank.width / 2;
+            const centerY = tank.y + tank.height / 2;
+            let bulletX = centerX;
+            let bulletY = centerY;
+            let vx = 0;
+            let vy = 0;
+            switch (tank.dir) {
+                case 'up':
+                    vy = -bulletSpeed;
+                    bulletY = tank.y - 10;
+                    break;
+                case 'down':
+                    vy = bulletSpeed;
+                    bulletY = tank.y + tank.height + 10;
+                    break;
+                case 'left':
+                    vx = -bulletSpeed;
+                    bulletX = tank.x - 10;
+                    break;
+                case 'right':
+                    vx = bulletSpeed;
+                    bulletX = tank.x + tank.width + 10;
+                    break;
+            }
+            bullets.push({
+                x: bulletX,
+                y: bulletY,
+                vx: vx,
+                vy: vy,
+                r: bulletRadius
+            });
+        }
+
+        // 更新我方坦克位置
+        function updatePlayer() {
+            if (keys.w) playerTank.dir = 'up';
+            if (keys.s) playerTank.dir = 'down';
+            if (keys.a) playerTank.dir = 'left';
+            if (keys.d) playerTank.dir = 'right';
+
+            let newX = playerTank.x;
+            let newY = playerTank.y;
+            switch (playerTank.dir) {
+                case 'up': newY -= playerTank.speed; break;
+                case 'down': newY += playerTank.speed; break;
+                case 'left': newX -= playerTank.speed; break;
+                case 'right': newX += playerTank.speed; break;
+            }
+
+            // 边界碰撞检测
+            if (newX >= 0 && newX + playerTank.width <= canvasWidth) {
+                playerTank.x = newX;
+            }
+            if (newY >= 0 && newY + playerTank.height <= canvasHeight) {
+                playerTank.y = newY;
+            }
+        }
+
+        // 更新敌方坦克
+        function updateEnemies() {
+            for (let enemy of enemyTanks) {
+                enemy.changeDirTimer++;
+                // 随机更换方向
+                if (enemy.changeDirTimer > 120) {
+                    enemy.dir = getRandomDir();
+                    enemy.changeDirTimer = 0;
+                }
+
+                let newX = enemy.x;
+                let newY = enemy.y;
+                switch (enemy.dir) {
+                    case 'up': newY -= enemy.speed; break;
+                    case 'down': newY += enemy.speed; break;
+                    case 'left': newX -= enemy.speed; break;
+                    case 'right': newX += enemy.speed; break;
+                }
+
+                // 碰到边界换方向
+                if (newX < 0) {
+                    enemy.dir = 'right';
+                } else if (newX + enemy.width > canvasWidth) {
+                    enemy.dir = 'left';
+                } else {
+                    enemy.x = newX;
+                }
+                if (newY < 0) {
+                    enemy.dir = 'down';
+                } else if (newY + enemy.height > canvasHeight) {
+                    enemy.dir = 'up';
+                } else {
+                    enemy.y = newY;
+                }
+            }
+        }
+
+        // 更新子弹，超出画布销毁
+        function updateBullets() {
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                const b = bullets[i];
+                b.x += b.vx;
+                b.y += b.vy;
+                // 超出画布移除子弹
+                if (b.x < 0 || b.x > canvasWidth || b.y < 0 || b.y > canvasHeight) {
+                    bullets.splice(i, 1);
+                }
+            }
+        }
+
+        // 绘制子弹
+        function drawBullets() {
+            ctx.fillStyle = '#ffff00';
+            for (const b of bullets) {
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // 游戏主循环
+        function gameLoop() {
+            // 清空画布
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+            updatePlayer();
+            updateEnemies();
+            updateBullets();
+
+            drawTank(playerTank);
+            enemyTanks.forEach(enemy => drawTank(enemy));
+            drawBullets();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 键盘按下监听
+        window.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (key === 'w') keys.w = true;
+            if (key === 'a') keys.a = true;
+            if (key === 's') keys.s = true;
+            if (key === 'd') keys.d = true;
+            if (e.code === 'Space') {
+                if (!keys.space) {
+                    shootBullet(playerTank);
+                }
+                keys.space = true;
+            }
+        });
+
+        // 键盘松开监听
+        window.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (key === 'w') keys.w = false;
+            if (key === 'a') keys.a = false;
+            if (key === 's') keys.s = false;
+            if (key === 'd') keys.d = false;
+            if (e.code === 'Space') keys.space = false;
+        });
+
+        // 初始化游戏并启动循环
+        initEnemies();
+        gameLoop();
+    </script>
+</body>
+</html>
