@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>坦克大战-无墙体对战版</title>
+<title>坦克大战-随机地图 全歼胜利 己方无敌版</title>
 <style>
 *{
     margin:0;
@@ -42,7 +42,7 @@ canvas{
 </style>
 </head>
 <body>
-<div class="tip">WASD移动坦克 | 空格发射子弹 | 子弹击中坦克可击毁，无墙体自由对战</div>
+<div class="tip">WASD：轻点移动一格，长按持续移动 | 空格发射子弹 | 随机墙体地图，消灭全部敌人获胜，己方坦克无敌</div>
 <canvas id="gameCanvas" width="640" height="480"></canvas>
 <br>
 <a href="../" class="back-btn">返回游戏大厅</a>
@@ -53,19 +53,99 @@ const ctx = canvas.getContext("2d");
 const W = canvas.width;
 const H = canvas.height;
 const TANK_SIZE = 40;
+const BLOCK_SIZE = 40;
 const BULLET_R = 5;
 const BULLET_SPEED = 7;
 
-// 按键状态
-const keys = {w:false,a:false,s:false,d:false,space:false};
+// 按键状态：按下标记、按下时间、持续计时器
+const keyState = {
+    w: { down: false, holdTime: 0, timer: null },
+    a: { down: false, holdTime: 0, timer: null },
+    s: { down: false, holdTime: 0, timer: null },
+    d: { down: false, holdTime: 0, timer: null },
+    space: { lock: false }
+};
+// 长按判定阈值（ms），超过则持续移动
+const HOLD_THRESHOLD = 150;
+// 长按连续移动间隔，数值越大速度越慢
+const MOVE_INTERVAL = 220;
+
+// 地图网格尺寸
+const BLOCK_COUNT_X = 16;
+const BLOCK_COUNT_Y = 12;
+let mapData = [];
+
+// 随机生成地图函数，保证玩家出生点不被包围
+function generateRandomMap() {
+    // 初始化全空地
+    mapData = new Array(BLOCK_COUNT_Y);
+    for (let y = 0; y < BLOCK_COUNT_Y; y++) {
+        mapData[y] = new Array(BLOCK_COUNT_X).fill(0);
+    }
+    // 四周外层全部围墙
+    for (let x = 0; x < BLOCK_COUNT_X; x++) {
+        mapData[0][x] = 1;
+        mapData[BLOCK_COUNT_Y - 1][x] = 1;
+    }
+    for (let y = 0; y < BLOCK_COUNT_Y; y++) {
+        mapData[y][0] = 1;
+        mapData[y][BLOCK_COUNT_X - 1] = 1;
+    }
+
+    // 随机内部墙体，30%概率生成墙
+    const wallRate = 0.3;
+    for (let y = 2; y < BLOCK_COUNT_Y - 2; y++) {
+        for (let x = 2; x < BLOCK_COUNT_X - 2; x++) {
+            if (Math.random() < wallRate) {
+                mapData[y][x] = 1;
+            }
+        }
+    }
+
+    // 玩家出生网格四周清空，防止被墙体围住
+    const spawnX = 1;
+    const spawnY = 4;
+    mapData[spawnY][spawnX] = 0;
+    mapData[spawnY - 1][spawnX] = 0;
+    mapData[spawnY + 1][spawnX] = 0;
+    mapData[spawnY][spawnX - 1] = 0;
+    mapData[spawnY][spawnX + 1] = 0;
+}
+
+// 绘制墙体
+function drawWall(){
+    ctx.fillStyle="#ffffff";
+    for(let y=0;y<mapData.length;y++){
+        for(let x=0;x<mapData[y].length;x++){
+            if(mapData[y][x] === 1){
+                ctx.fillRect(x*BLOCK_SIZE, y*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            }
+        }
+    }
+}
+
+// 矩形墙体碰撞检测
+function checkRectHitWall(x,y,w,h){
+    const left = Math.floor(x / BLOCK_SIZE);
+    const top = Math.floor(y / BLOCK_SIZE);
+    const right = Math.floor((x + w - 1) / BLOCK_SIZE);
+    const bottom = Math.floor((y + h - 1) / BLOCK_SIZE);
+    for(let ty = top; ty <= bottom; ty++){
+        for(let tx = left; tx <= right; tx++){
+            if(ty >= 0 && ty < BLOCK_COUNT_Y && tx >=0 && tx < BLOCK_COUNT_X){
+                if(mapData[ty][tx] === 1) return true;
+            }
+        }
+    }
+    return false;
+}
 
 // 玩家坦克
 const player = {
-    x:60,
-    y:180,
+    x: BLOCK_SIZE,
+    y: BLOCK_SIZE * 4,
     width:TANK_SIZE,
     height:TANK_SIZE,
-    speed:3,
     dir:"up",
     color:"#0088ff"
 };
@@ -80,12 +160,15 @@ function getRandDir(){
     return arr[Math.floor(Math.random()*4)];
 }
 
-// 生成敌方坦克
+// 生成敌方坦克（只在空地生成）
 function spawnEnemies(){
     enemies = [];
     for(let i=0;i<ENEMY_COUNT;i++){
-        const ex = Math.floor(Math.random()*(W-TANK_SIZE));
-        const ey = Math.floor(Math.random()*(H-TANK_SIZE));
+        let ex,ey;
+        do{
+            ex = Math.floor(Math.random()*(W-TANK_SIZE));
+            ey = Math.floor(Math.random()*(H-TANK_SIZE));
+        }while(checkRectHitWall(ex,ey,TANK_SIZE,TANK_SIZE));
         enemies.push({
             x:ex,y:ey,
             width:TANK_SIZE,
@@ -132,37 +215,49 @@ function shoot(tank){
     bullets.push({x:bx,y:by,vx,vy,r:BULLET_R});
 }
 
-// 玩家移动逻辑（仅边界限制，无墙体碰撞）
-function updatePlayer(){
-    // 更新朝向
-    if(keys.w) player.dir = "up";
-    if(keys.s) player.dir = "down";
-    if(keys.a) player.dir = "left";
-    if(keys.d) player.dir = "right";
-
-    let dx = 0;
-    let dy = 0;
-    switch(player.dir){
-        case "up": dy = -player.speed; break;
-        case "down": dy = player.speed; break;
-        case "left": dx = -player.speed; break;
-        case "right": dx = player.speed; break;
+// 移动一格函数
+function moveOneStep(dir){
+    player.dir = dir;
+    let newX = player.x;
+    let newY = player.y;
+    switch(dir){
+        case "up": newY -= BLOCK_SIZE; break;
+        case "down": newY += BLOCK_SIZE; break;
+        case "left": newX -= BLOCK_SIZE; break;
+        case "right": newX += BLOCK_SIZE; break;
     }
-    // 预测新坐标
-    let newX = player.x + dx;
-    let newY = player.y + dy;
-
-    // 画布边界约束
-    if(newX < 0) newX = 0;
-    if(newX + player.width > W) newX = W - player.width;
-    if(newY < 0) newY = 0;
-    if(newY + player.height > H) newY = H - player.height;
-
-    player.x = newX;
-    player.y = newY;
+    // 边界判定
+    if(newX < 0 || newX + player.width > W) return false;
+    if(newY < 0 || newY + player.height > H) return false;
+    // 墙体判定，无墙再移动
+    if(!checkRectHitWall(newX, newY, player.width, player.height)){
+        player.x = newX;
+        player.y = newY;
+        return true;
+    }
+    return false;
 }
 
-// 更新敌方AI 碰到边界自动换随机方向
+// 启动长按持续移动计时器
+function startHoldMove(keyName, dir) {
+    const key = keyState[keyName];
+    key.timer = setInterval(()=>{
+        moveOneStep(dir);
+    }, MOVE_INTERVAL);
+}
+
+// 清除按键计时器
+function clearKeyTimer(keyName) {
+    const key = keyState[keyName];
+    if(key.timer){
+        clearInterval(key.timer);
+        key.timer = null;
+    }
+    key.down = false;
+    key.holdTime = 0;
+}
+
+// 更新敌方AI
 function updateEnemies(){
     for(let e of enemies){
         e.timer++;
@@ -179,8 +274,7 @@ function updateEnemies(){
         }
         let nx = e.x + dx;
         let ny = e.y + dy;
-        // 触碰边界随机换方向
-        if(nx<0 || nx+e.width>W || ny<0 || ny+e.height>H){
+        if(nx<0 || nx+e.width>W || ny<0 || ny+e.height>H || checkRectHitWall(nx,ny,e.width,e.height)){
             e.dir = getRandDir();
         }else{
             e.x = nx;
@@ -189,31 +283,38 @@ function updateEnemies(){
     }
 }
 
-// 更新子弹、碰撞逻辑
+// 更新子弹与碰撞 + 胜利判定（移除击中玩家销毁逻辑，己方无敌）
 function updateBullets(){
     for(let i=bullets.length-1;i>=0;i--){
         let b = bullets[i];
         b.x += b.vx;
         b.y += b.vy;
-        // 飞出画布销毁子弹
+        // 出画布删除
         if(b.x <0 || b.x>W || b.y<0 || b.y>H){
             bullets.splice(i,1);
             continue;
         }
-        // 击中敌方坦克
+        // 击中墙体销毁
+        if(checkRectHitWall(b.x-b.r,b.y-b.r,b.r*2,b.r*2)){
+            bullets.splice(i,1);
+            continue;
+        }
+        // 击中敌人
         for(let j=enemies.length-1;j>=0;j--){
             let en = enemies[j];
             if(b.x > en.x && b.x < en.x+en.width && b.y>en.y && b.y<en.y+en.height){
                 enemies.splice(j,1);
                 bullets.splice(i,1);
+                // 全部敌人消灭，胜利弹窗
+                if(enemies.length === 0){
+                    setTimeout(()=>{
+                        alert("恭喜！你消灭了所有敌方坦克，游戏胜利！刷新页面重新开局");
+                    }, 100);
+                }
                 break;
             }
         }
-        // 击中玩家
-        if(b.x > player.x && b.x < player.x+player.width && b.y>player.y && b.y<player.y+player.height){
-            alert("你被击毁，刷新页面重新开局！");
-            bullets.splice(i,1);
-        }
+        // ========== 已删除击中玩家击毁逻辑，己方坦克无敌 ==========
     }
 }
 
@@ -227,10 +328,10 @@ function drawBullets(){
     }
 }
 
-// 游戏主循环
+// 游戏循环
 function gameLoop(){
     ctx.clearRect(0,0,W,H);
-    updatePlayer();
+    drawWall();
     updateEnemies();
     updateBullets();
     drawTank(player);
@@ -239,27 +340,60 @@ function gameLoop(){
     requestAnimationFrame(gameLoop);
 }
 
-// 键盘监听
+// 键盘按下
 window.addEventListener("keydown",e=>{
     const key = e.key.toLowerCase();
-    if(key === "w") keys.w = true;
-    if(key === "s") keys.s = true;
-    if(key === "a") keys.a = true;
-    if(key === "d") keys.d = true;
-    if(e.code === "Space" && !keys.space){
+    // W 向上
+    if(key === "w" && !keyState.w.down){
+        keyState.w.down = true;
+        moveOneStep("up");
+        setTimeout(()=>{
+            if(keyState.w.down) startHoldMove("w", "up");
+        }, HOLD_THRESHOLD);
+    }
+    // A 向左
+    if(key === "a" && !keyState.a.down){
+        keyState.a.down = true;
+        moveOneStep("left");
+        setTimeout(()=>{
+            if(keyState.a.down) startHoldMove("a", "left");
+        }, HOLD_THRESHOLD);
+    }
+    // S 向下
+    if(key === "s" && !keyState.s.down){
+        keyState.s.down = true;
+        moveOneStep("down");
+        setTimeout(()=>{
+            if(keyState.s.down) startHoldMove("s", "down");
+        }, HOLD_THRESHOLD);
+    }
+    // D 向右
+    if(key === "d" && !keyState.d.down){
+        keyState.d.down = true;
+        moveOneStep("right");
+        setTimeout(()=>{
+            if(keyState.d.down) startHoldMove("d", "right");
+        }, HOLD_THRESHOLD);
+    }
+    // 空格发射子弹（单次，不连发）
+    if(e.code === "Space" && !keyState.space.lock){
+        keyState.space.lock = true;
         shoot(player);
-        keys.space = true;
     }
 });
+
+// 键盘松开，停止持续移动
 window.addEventListener("keyup",e=>{
     const key = e.key.toLowerCase();
-    if(key === "w") keys.w = false;
-    if(key === "s") keys.s = false;
-    if(key === "a") keys.a = false;
-    if(key === "d") keys.d = false;
-    if(e.code === "Space") keys.space = false;
+    if(key === "w") clearKeyTimer("w");
+    if(key === "s") clearKeyTimer("s");
+    if(key === "a") clearKeyTimer("a");
+    if(key === "d") clearKeyTimer("d");
+    if(e.code === "Space") keyState.space.lock = false;
 });
 
+// 初始化：生成随机地图 + 生成敌方坦克
+generateRandomMap();
 spawnEnemies();
 gameLoop();
 </script>
